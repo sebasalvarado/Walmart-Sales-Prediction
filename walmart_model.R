@@ -174,11 +174,21 @@ accur_table <- train.test %>% select(Type,Prediction)
 bool_vector <- accur_table$Type == accur_table$Prediction
 accuracy <- length(which(bool_vector)) / length(bool_vector) # 97% accurate model 
 
-#Use a decision tree to predict which Rank a given store liest in
+#Use a decision tree to predict which Rank a given store lies in
 train.train$Rank <- factor(train.train$Rank)
-rank.rpart <- rpart(Rank~ .-Weekly_Sales ,data=train.train,control=rpart.control(minsplit=10,cp=0.01))
+head(train.train)
+rank.rpart <- rpart(Rank~ .-Weekly_Sales-Size,data=train.train,control=rpart.control(minsplit=10,cp=0.03))
 summary(rank.rpart)
-fancyRpartPlot(rank.rpart)
+fancyRpartPlot(rank.rpart,sub="Ranks")
+save(rank.rpart,file="rank.Rdata")
+#Evaluate Results of the Model
+prediction_rank <- predict(rank.rpart,train.test, type="class")
+train.test$RankPred <- prediction_rank
+
+accuracy_test <- train.test %>% select(Rank,RankPred)
+values <- accuracy_test$Rank == accuracy_test$RankPred
+accuracy_value <- length(which(values)) / length(values) #89%
+
 
 #LINEAR REGRESSION  -------------------------------------------------------------------------------------------------------
 #Weekly Sales for all stores
@@ -205,6 +215,5 @@ fit1 <- lm(Weekly_Sales ~ Temperature + Unemployment + IsHoliday + CPI + MarkDow
 summary(fit1)
 train.predict = predict(train.reg,train_1, interval="confidence")
 
-#TASK:Predict Weekly Sales per store, department and Date---------------------------------------
-#We will need to join the features because that variables are important for sales
+
 
