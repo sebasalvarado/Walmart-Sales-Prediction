@@ -1,0 +1,224 @@
+---
+title: "Walmart Sales Prediction"
+author: "Sebastian Alvarado"
+date: "August 14, 2016"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#Introduction
+Predicting future sales for a company is one of the most important aspects of strategic planning. We would like to analyze how internal and external factors of one of the biggest 
+companies in the US can affect their Weekly Sales in the future. This model tries to achieve 
+an approximate weekly sales prediction looking at previous years performance per Store on 
+a weekly basis. 
+
+The data collected ranges from 2010 to 2012, where 45 Walmart stores across the country were
+included in this analysis. It is important to note that we also have external data available
+like CPI,Unemployment Rate and Fuel Prices in the region of each store which, hopefully, help 
+us to make a more detailed analysis. 
+
+To learn more about Walmart and what is their business model you can read about the company [here](https://en.wikipedia.org/wiki/Walmart).
+
+#Data Explanation
+We had access to four differente datasets from Kaggle.com about the company. These datasets
+cotained information about the stores,departments,temperature, unemployment etc. We will explain each one of the datasets in more detail with each one of its features.  
+**Stores**:  
+  - Store: The store number. Range from 1-45.  
+  - Type: Three types of stores 'A', 'B' or 'C'.  
+  - Size: Sets the size of a Store  would be calculated by the no. of products available in the     particular store ranging from 34,000 to 210,000.    
+**Train**:  
+  -Date: The date of the week where this observation was taken . 
+  -Weekly_Sales: The sales recorded during that Week.  
+  -Store: The store which observation in recorded 1-45.   
+  -Dept: One of 1-99 that shows the department.  
+  -IsHoliday: Boolean value representing a holiday week or not.  
+**Features**: 
+  -Temperature:Temperature of the region during that week.  
+  -Fuel_Price: Fuel Price in that region during that week.  
+  -MarkDown1:5 : Represents the Type of markdown and what quantity was available during that week.  
+  -CPI: Consumer Price Index during that week.  
+  -Unemployment: The unemployment rate during that week in the region of the store.  
+
+
+The test data have the same fields as the Train data, only the Weekly_Sales are empty.  
+#Data Origin and Collection
+```{r loading, results="hide"}
+#Walmart Predictive Analysis
+#Load Required Libraries
+
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(readr)
+library(lubridate)
+library(rpart)
+library(rattle)
+library(car)
+library(caret)
+library(corrplot)
+library(rpart.plot)
+```
+Ensure that you have train.csv, test.csv, stores.csv and features.csv in your current
+working directory.  
+```{r}
+#Loading files to work with
+train<- read_csv("train.csv")
+stores <- read_csv("stores.csv")
+features <- read_csv("features.csv")
+```
+Our first step will be to join our two tables by Store which is the common column.  
+```{r}
+stores$Store <- factor(stores$Store)
+train$Store <- factor(train$Store)
+train <- full_join(train,stores,by=c("Store"))
+```
+#Preparation
+In this step of the process we will conduct some feature engineering, we will use the
+features that our data currently has but will tweak them in a way that makes our analysis easier. The most important objective in this step is to generate new features that will help us produce a better model 
+**Include a Week Number of the year**
+```{r}
+train$WeekNum <- as.numeric(format(train$Date+3,"%U"))
+```
+We have also noticed that some Weekly Sales contain negative values, after analyzing the data we have concluded that those refer to Returned Products from previous weeks.
+**Add a Returns Column**
+```{r}
+train$Returns <- lapply(train$Weekly_Sales,function(sales){
+  ifelse(sales < 0,sales,0)
+})
+train$Weekly_Sales <- lapply(train$Weekly_Sales,function(sales){
+  ifelse(sales > 0,sales,0)
+})
+```
+
+At the moment, our dataframe contains 421570 observations, since the objectve of this model is to predict the Weekly Sales of a particular store given previous years, external information and tendency we will add the sales per department and put it together into one observation. In other words we will not subdivide sales by department. Thus we can make our Weekly Sales to be our Net Sales since we now can do Weekly_Sales - Returns to avoid negative values.   
+##Aggregating Weekly Sales to Net Sales
+```{r, eval=FALSE}
+final_data <- data.frame(Store=factor(),Date=as.Date(character()),Weekly_Sales=numeric(),IsHoliday=logical(),Type=factor(),WeekNum=factor())
+aggregate_sales <- function(){
+for(i in 1:45){
+  store_data <- train %>% filter(Store == i)
+  dates <- unique(train$Date)
+  for(next_date in seq_along(dates)){
+    current_date <- unique(train$Date)[[next_date]]
+    date_data <- store_data %>% filter(Date==current_date)
+    #Add all the weekly sales
+    net_sales <- unlist(sum(date_data$Weekly_Sales)) - unlist(sum(date_data$Returns))
+    #Construct the data frame and append it
+    next_row <- data.frame(Store=i,Date=current_date,Weekly_Sales=net_sales,IsHoliday=date_data$IsHoliday[[1]],Type=date_data$Type[[1]],WeekNum=date_data$WeekNum)
+    next_row$Store <- factor(next_row$Store)
+    final_data <- rbind(final_data,next_row)
+  }
+}
+  return(final_data)
+}
+# Sum the sales by store without taking into account each department
+final_data <- aggregate_sales()
+```
+
+```{r, echo=FALSE}
+train <- read_csv("merged_train.csv")
+train$Weekly_Sales <- as.numeric(train$Weekly_Sales)
+train$Store <- factor(train$Store)
+train$Type <- factor(train$Type)
+```
+
+After performing this procedure we now have 6435 observations which makes our data more manageable for further analysis.  
+```{r}
+features$Store <- factor(features$Store)
+#Merge our final_data with our features
+train <- left_join(train,features,by=c("Store","Date","IsHoliday"))
+# Make the NA markdown as 0
+train$MarkDown1 <- sapply(train$MarkDown1, function(value){
+  ifelse(is.na(value),0,value)
+})
+train$MarkDown2 <- sapply(train$MarkDown2, function(value){
+  ifelse(is.na(value),0,value)
+})
+train$MarkDown3 <- sapply(train$MarkDown3, function(value){
+  ifelse(is.na(value),0,value)
+})
+train$MarkDown4 <- sapply(train$MarkDown4, function(value){
+  ifelse(is.na(value),0,value)
+})
+train$MarkDown5 <- sapply(train$MarkDown5, function(value){
+  ifelse(is.na(value),0,value)
+})
+```
+We will partition the training set into two different dataframes in order to keep
+our analysis consistent and avoid testing on our training data.
+
+Furthermore, since there is a high degree of uncertainty we will have each store divided by Ranges. In other words we will take the range of Weekly Sales for a store 
+```{r}
+#Subset our data into train and test
+index <- createDataPartition(train$Weekly_Sales,list = FALSE,p=0.8)
+train.train <-train[index,]
+train.test <- train[-index,]
+```
+#Explortory Analysis
+###Data Review  
+For a small glimpse of how our data looks like we can refer to the following picture.  
+```{r}
+head(train.train)
+```
+For our exploration analysis we started with the aggregate() function because we wanted to 
+know which Store and Type of store was having the most sales, on average. 
+```{r,Aggregate}
+aggregate(train.train[,"Weekly_Sales"], by=train.train[,c("Store"), drop=FALSE], mean)
+aggregate(train.train[,"Weekly_Sales"], by=train.train[,c("Type"), drop=FALSE], mean)
+aggregate(train.train[,"Weekly_Sales"], by=train.train[,c("Type"), drop=FALSE], max)
+```
+
+With this initial information, we wanted to dig a little deeper and that is why we decided that graphic models will help us to find the interaction between each of the variables with Weekly Sales. Our goal with this exploration was to find correlation, patterns or any other insight that revealed more information between diving into our predictive model. 
+
+```{r,echo=FALSE}
+ggplot(train.train,aes(x=CPI,y=Weekly_Sales)) + geom_point(aes(color=train.train$Type)) + geom_smooth() + scale_x_continuous(name="Consumer Price Index") + scale_y_continuous(name="Weekly Sales") + scale_color_discrete(name="Type")
+ggplot(train.train,aes(x=Unemployment,y=Weekly_Sales)) + geom_point(aes(color=train.train$Type)) + geom_smooth()  + scale_x_continuous(name="Unemployment") + scale_y_continuous(name="Weekly Sales") + scale_color_discrete(name="Type")
+ggplot(train.train,aes(x=Temperature,y=Weekly_Sales)) + geom_point(aes(color=train.train$Type)) + geom_smooth()  + scale_x_continuous(name="Temperature") + scale_y_continuous(name="Weekly Sales") + scale_color_discrete(name="Type")
+```
+  
+
+In the previous graphs one can see that there is no clear correlation between Weekly Sales and Unemployment or Temperature. A clearer correlation is visible between CPI and Weekly Sales.
+However what is clear from this anlaysis is that Type A stores have more sales than any other type.  
+
+We also want to analyze what is the effect of the MarkDowns on the weekly sales of the company
+after analyzing the graphs we decided to show the one that had more impact. However, as one can see the MarkDowns don't show an inmense correlation.
+```{r, echo=FALSE}
+ggplot(train.train,aes(x=MarkDown4,y=Weekly_Sales)) + geom_point(aes(color=train.train$Type)) + geom_smooth()  + scale_x_continuous(name="MarkDown4") + scale_y_continuous(name="Weekly Sales") + scale_color_discrete(name="Type")
+
+```
+
+
+Plot Store sales divided by Type of Store, in the following plot we selected Type A stores
+```{r}
+colnames(train.train)
+A_stores <- train.train %>% filter(Type=='A')
+head(train.train)
+ggplot(A_stores,aes(x=CPI,y=Weekly_Sales)) + geom_point(aes(color=A_stores$IsHoliday)) + geom_smooth()#Sales vary depending on the weeknum we are in
+```
+Now we want to partition the Weekly Sales based on a store, from our analysis we saw that Store 20 is the one with the most sales. We will analyze this stores' results
+```{r, eval=FALSE}
+store_graph <- train.train %>% filter(Store == 20)
+ggplot(store_graph,aes(x=CPI,y=Weekly_Sales)) + geom_point(aes(color=store_graph$IsHoliday)) + geom_smooth()
+```
+Finally, look for a correlation matrix between all of our numerical features.  
+```{r,eval=FALSE}
+#Correlation Graph
+corrplot.mixed(cor(train.train[,c(-1,-2,-5)]), lower = "ellipse",upper = "number")
+```
+#Modelling
+Since we saw that the Store type is very important to predict the Weekly Sales of a given store, we will run a Decision Tree model to predict what Type a Store should be based on the 
+different features that we have on our model.  
+**Decision Tree**
+
+```{r}
+#Using a decision tree we will like to predict the Type of a store based on all the other parameters
+train.rpart <-rpart(Type ~ Weekly_Sales + Size,data=train.train, control=rpart.control(minsplit=1,cp=0.005))
+summary(train.rpart)
+fancyRpartPlot(train.rpart)
+```
+#Model Evaluation and Results
+#Conclusion
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
